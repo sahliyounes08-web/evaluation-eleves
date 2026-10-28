@@ -32,7 +32,7 @@ def load_students():
     data = worksheet.get_all_records()
     return pd.DataFrame(data)
 
-@st.cache_data(ttl=60) # Recharge souvent pour voir les nouvelles notes
+@st.cache_data(ttl=60)
 def load_evaluations():
     client = get_gspread_client()
     sheet = client.open_by_key(st.secrets["spreadsheet_id"])
@@ -66,7 +66,6 @@ try:
 except Exception as e:
     st.error("⚠️ Impossible de charger les données.")
     st.error(f"Détail technique : {e}")
-    st.info("Vérifiez que les secrets sont bien configurés.")
     st.stop()
 
 # Sélection de la classe
@@ -76,64 +75,79 @@ classe_choisie = st.selectbox("🎓 Sélectionnez une classe :", classes)
 df_classe = df_students[df_students["القسم"] == classe_choisie].copy()
 st.success(f"**{len(df_classe)} élèves** dans la classe « {classe_choisie} »")
 
-# ============ TABLEAU DE BORD (NOUVEAU) ============
-st.markdown("### 📊 Tableau de bord de la classe")
-
-# On filtre les évaluations de la classe choisie
+# ============ PRÉPARATION DES DERNIÈRES NOTES ============
+# On prépare un dictionnaire pour mémoriser le dernier devoir et la dernière compo de chaque élève
+last_grades = {}
 if not df_evals.empty and "Classe" in df_evals.columns:
     df_evals_classe = df_evals[df_evals["Classe"] == classe_choisie].copy()
+    
+    if not df_evals_classe.empty:
+        # On trie par date pour être sûr de prendre la toute dernière évaluation
+        df_sorted = df_evals_classe.sort_values("Date")
+        df_derniere_eval = df_sorted.groupby("ID_Eleve").last().reset_index()
+        
+        for _, r in df_derniere_eval.iterrows():
+            try:
+                d = float(r.get("Note_Devoir", 10.0))
+                c = float(r.get("Note_Composition", 10.0))
+            except:
+                d, c = 10.0, 10.0
+            # On s'assure que les notes restent entre 0 et 20
+            d = max(0.0, min(20.0, d))
+            c = max(0.0, min(20.0, c))
+            last_grades[str(r["ID_Eleve"])] = (d, c)
 else:
     df_evals_classe = pd.DataFrame()
+
+# ============ TABLEAU DE BORD ============
+st.markdown("### 📊 Tableau de bord de la classe")
 
 if df_evals_classe.empty:
     st.info("Aucune évaluation enregistrée pour cette classe pour le moment. Le tableau de bord s'affichera dès que vous aurez enregistré des notes.")
 else:
-    # On convertit les colonnes en nombres pour faire les calculs
-    colonnes_numeriques = ["Presence", "Total_Assiduite", "Moyenne"]
-    for col in colonnes_numeriques:
-        if col in df_evals_classe.columns:
-            df_evals_classe[col] = pd.to_numeric(df_evals_classe[col], errors='coerce').fillna(0)
+    # Nettoyage de sécurité pour éviter le bug du 171.29
+    cols_to_clean = ["Presence", "Total_Assiduite", "Note_Devoir", "Note_Composition", "Moyenne"]
+    for col in cols_to_clean:
+        if col in df_derniere_eval.columns:
+            df_derniere_eval[col] = pd.to_numeric(df_derniere_eval[col], errors='coerce').fillna(0)
+            # On limite entre 0 et 20 pour éviter les valeurs aberrantes
+            df_derniere_eval[col] = df_derniere_eval[col].clip(0, 20)
 
-    # On garde la DERNIÈRE évaluation de chaque élève
-    df_derniere_eval = df_evals_classe.sort_values("Date").groupby("ID_Eleve").last().reset_index()
+    # Recalcul de la moyenne pour être sûr qu'elle soit exacte
+    df_derniere_eval["Moyenne"] = (df_derniere_eval["Total_Assiduite"] + df_derniere_eval["Note_Devoir"] + df_derniere_eval["Note_Composition"]) / 3
 
-    # Calculs des statistiques
     total_eleves_notes = len(df_derniere_eval)
     moyenne_classe = df_derniere_eval["Moyenne"].mean()
     
-    # Taux de présence (basé sur une note de présence sur 2)
-    # Si la présence est à 2, l'élève est considéré présent.
     presents = len(df_derniere_eval[df_derniere_eval["Presence"] >= 1.5])
     taux_presence = (presents / total_eleves_notes) * 100 if total_eleves_notes > 0 else 0
 
-    # Élèves en difficulté (moyenne < 10)
     eleves_difficulte = df_derniere_eval[df_derniere_eval["Moyenne"] < 10]
 
-    # Affichage des métriques
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Élèves évalués", f"{total_eleves_notes} / {len(df_classe)}")
     col2.metric("Moyenne de la classe", f"{moyenne_classe:.2f} / 20")
     col3.metric("Taux de présence", f"{taux_presence:.1f} %")
     col4.metric("Élèves en difficulté", f"{len(eleves_difficulte)}")
 
-    # Liste des élèves à encadrer
     if not eleves_difficulte.empty:
         with st.expander("🚨 Voir les élèves qui ont besoin d'encadrement (Moyenne < 10)"):
             df_affichage = eleves_difficulte[["Nom", "Prénom", "Moyenne", "Remarque"]].copy()
             df_affichage.columns = ["Nom", "Prénom", "Moyenne", "Remarque"]
             st.dataframe(df_affichage, use_container_width=True)
 
-    # Graphique simple
     with st.expander("📈 Voir le graphique des moyennes"):
-        st.bar_chart(df_derniere_eval.set_index("Nom")["Moyenne"])
+        # On crée un nom complet pour éviter les doublons dans le graphique
+        df_derniere_eval["Nom_Complet"] = df_derniere_eval["Nom"] + " " + df_derniere_eval["Prénom"]
+        st.bar_chart(df_derniere_eval.set_index("Nom_Complet")["Moyenne"])
 
 st.markdown("---")
 
-# ============ SAISIE DES NOTES (EXISTANT) ============
+# ============ SAISIE DES NOTES ============
 date_eval = st.date_input("📅 Date de l'évaluation", value=datetime.today())
 
 st.markdown("### 📝 Saisie des notes")
-st.caption("Notes d'assiduité sur 20 + Devoir /20 + Composition /20. La moyenne est calculée automatiquement.")
+st.caption("💡 Les notes de Devoir et de Composition sont mémorisées. Vous n'avez pas besoin de les ressaisir à chaque fois !")
 
 evaluations = []
 
@@ -155,10 +169,14 @@ for _, row in df_classe.iterrows():
             projet = st.number_input("Projet (0-5)", 0, 5, 3, key=f"proj_{id_elev}")
         
         col3, col4 = st.columns(2)
+        
+        # On récupère les dernières notes mémorisées, sinon on met 10 par défaut
+        val_dev, val_comp = last_grades.get(id_elev, (10.0, 10.0))
+        
         with col3:
-            devoir = st.number_input("Note Devoir /20", 0.0, 20.0, 10.0, 0.5, key=f"dev_{id_elev}")
+            devoir = st.number_input("Note Devoir /20", 0.0, 20.0, float(val_dev), 0.5, key=f"dev_{id_elev}")
         with col4:
-            composition = st.number_input("Note Composition /20", 0.0, 20.0, 10.0, 0.5, key=f"comp_{id_elev}")
+            composition = st.number_input("Note Composition /20", 0.0, 20.0, float(val_comp), 0.5, key=f"comp_{id_elev}")
         
         remarque = st.text_area("💬 Remarque", key=f"rem_{id_elev}")
         
@@ -218,7 +236,7 @@ if st.button("💾 Enregistrer les évaluations dans Google Sheets", type="prima
         ])
     try:
         save_evaluation(rows_to_save)
-        st.success(f"✅ {len(rows_to_save)} évaluations enregistrées dans la feuille « Evaluation » !")
+        st.success(f"✅ {len(rows_to_save)} évaluations enregistrées !")
         st.balloons()
     except Exception as e:
         st.error(f"❌ Erreur lors de l'enregistrement : {e}")
