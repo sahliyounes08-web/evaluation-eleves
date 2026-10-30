@@ -44,11 +44,9 @@ if check_password():
 
     @st.cache_data(ttl=60)
     def load_all_evaluations():
-        """Charge les données des 3 feuilles et les fusionne pour l'historique"""
         client = get_gspread_client()
         sheet = client.open_by_key(st.secrets["spreadsheet_id"])
         dfs = []
-        # On lit les 3 feuilles pour récupérer les dernières notes (Devoir, TP, Examen)
         for sheet_name in ["Evaluation", "Evaluation 2", "Evaluation 3"]:
             try:
                 worksheet = sheet.worksheet(sheet_name)
@@ -56,13 +54,12 @@ if check_password():
                 if data:
                     dfs.append(pd.DataFrame(data))
             except:
-                pass # Si la feuille n'existe pas encore, on ignore
+                pass 
         if dfs:
             return pd.concat(dfs, ignore_index=True)
         return pd.DataFrame()
 
     def save_evaluation(rows_to_save, target_sheet):
-        """Sauvegarde dans la feuille spécifique (Evaluation, Evaluation 2 ou 3)"""
         client = get_gspread_client()
         sheet = client.open_by_key(st.secrets["spreadsheet_id"])
         worksheet = sheet.worksheet(target_sheet)
@@ -86,7 +83,7 @@ if check_password():
     classe_choisie = st.selectbox("🎓 Sélectionnez un groupe / une classe :", classes)
     df_classe = df_students[df_students["القسم"] == classe_choisie].copy()
     
-    # Détection automatique du type d'établissement selon le nom de la classe
+    # Détection automatique du type d'établissement
     is_usthb = "USTHB" in classe_choisie.upper()
     is_ifg = "IFG" in classe_choisie.upper()
     is_lycee = not is_usthb and not is_ifg
@@ -118,14 +115,15 @@ if check_password():
     if is_lycee:
         st.caption("💡 Notes d'assiduité sur 20 + Devoir /20 + Composition /20.")
     elif is_usthb:
-        st.caption("💡 Fac (USTHB) : Présence/Participation sur 5 + TP sur 15.")
+        st.caption("💡 Fac (USTHB) : Présence /2.5 + Assiduité /2.5 + TP /15.")
     elif is_ifg:
-        st.caption("💡 Institut (IFG) : Présence /3 + Travaux & Assiduité /5 + Examen Final /12.")
+        st.caption("💡 Institut (IFG) : Présence /3 + Travaux (Salle, TP, Assiduité, Terrain) /5 + Examen Final /12.")
 
     evaluations = []
 
-    for _, row in df_classe.iterrows():
+    for i, (_, row) in enumerate(df_classe.iterrows()):
         id_elev = str(row["الترتيب"])
+        uid = f"{i}_{id_elev}" 
         nom_complet = f"{row['اللقب']} {row['الاسم']}"
         
         with st.expander(f"👤 {nom_complet}"):
@@ -134,21 +132,21 @@ if check_password():
             if is_lycee:
                 col1, col2 = st.columns(2)
                 with col1:
-                    presence = st.number_input("Présence (0-2)", 0, 2, 2, key=f"pr_{id_elev}")
-                    participation = st.number_input("Participation (0-3)", 0, 3, 2, key=f"pa_{id_elev}")
-                    calme = st.number_input("Calme (0-2)", 0, 2, 2, key=f"ca_{id_elev}")
-                    tablier = st.number_input("Tablier (0-1)", 0, 1, 1, key=f"ta_{id_elev}")
+                    presence = st.number_input("Présence (0-2)", 0, 2, 2, key=f"pr_{uid}")
+                    participation = st.number_input("Participation (0-3)", 0, 3, 2, key=f"pa_{uid}")
+                    calme = st.number_input("Calme (0-2)", 0, 2, 2, key=f"ca_{uid}")
+                    tablier = st.number_input("Tablier (0-1)", 0, 1, 1, key=f"ta_{uid}")
                 with col2:
-                    affaires = st.number_input("Affaires (0-2)", 0, 2, 2, key=f"af_{id_elev}")
-                    cahier = st.number_input("Cahier (0-3)", 0, 3, 2, key=f"ca2_{id_elev}")
-                    technologie = st.number_input("Technologie (0-2)", 0, 2, 2, key=f"te_{id_elev}")
-                    projet = st.number_input("Projet (0-5)", 0, 5, 3, key=f"pr2_{id_elev}")
+                    affaires = st.number_input("Affaires (0-2)", 0, 2, 2, key=f"af_{uid}")
+                    cahier = st.number_input("Cahier (0-3)", 0, 3, 2, key=f"ca2_{uid}")
+                    technologie = st.number_input("Technologie (0-2)", 0, 2, 2, key=f"te_{uid}")
+                    projet = st.number_input("Projet (0-5)", 0, 5, 3, key=f"pr2_{uid}")
                 
                 col3, col4 = st.columns(2)
-                with col3: devoir = st.number_input("Devoir /20", 0.0, 20.0, 10.0, 0.5, key=f"de_{id_elev}")
-                with col4: composition = st.number_input("Composition /20", 0.0, 20.0, 10.0, 0.5, key=f"co_{id_elev}")
+                with col3: devoir = st.number_input("Devoir /20", 0.0, 20.0, 10.0, 0.5, key=f"de_{uid}")
+                with col4: composition = st.number_input("Composition /20", 0.0, 20.0, 10.0, 0.5, key=f"co_{uid}")
                 
-                remarque = st.text_area("💬 Remarque", key=f"re_{id_elev}")
+                remarque = st.text_area("💬 Remarque", key=f"re_{uid}")
                 
                 total_assiduite = presence + participation + calme + tablier + affaires + cahier + technologie + projet
                 moyenne = round((total_assiduite + devoir + composition) / 3, 2)
@@ -161,51 +159,54 @@ if check_password():
                     total_assiduite, devoir, composition, moyenne, remarque
                 ])
 
-            # ================= FORMULAIRE USTHB =================
+            # ================= FORMULAIRE USTHB (Mis à jour) =================
             elif is_usthb:
-                col1, col2 = st.columns(2)
+                col1, col2, col3 = st.columns(3)
                 with col1:
-                    pres_part_usthb = st.number_input("Présence & Participation (/5)", 0.0, 5.0, 4.0, 0.5, key=f"up_{id_elev}")
+                    pres_usthb = st.number_input("Présence (/2.5)", 0.0, 2.5, 2.5, 0.5, key=f"up1_{uid}")
                 with col2:
-                    tp_usthb = st.number_input("Note du TP (/15)", 0.0, 15.0, 10.0, 0.5, key=f"ut_{id_elev}")
+                    assid_usthb = st.number_input("Assiduité (/2.5)", 0.0, 2.5, 2.5, 0.5, key=f"up2_{uid}")
+                with col3:
+                    tp_usthb = st.number_input("Note du TP (/15)", 0.0, 15.0, 10.0, 0.5, key=f"ut_{uid}")
                 
-                remarque = st.text_area("💬 Remarque", key=f"re_{id_elev}")
-                moyenne = round(pres_part_usthb + tp_usthb, 2)
+                remarque = st.text_area("💬 Remarque", key=f"re_{uid}")
+                moyenne = round(pres_usthb + assid_usthb + tp_usthb, 2)
                 
                 st.markdown(f"**Note finale : {moyenne}/20**")
                 
+                # On adapte le stockage pour ne pas casser le Google Sheet
                 evaluations.append([
                     date_eval.strftime("%d/%m/%Y"), id_elev, row["اللقب"], row["الاسم"], row["القسم"],
-                    pres_part_usthb, 0, 0, 0, 0, 0, 0, 0, 
-                    pres_part_usthb, tp_usthb, 0, moyenne, remarque 
+                    pres_usthb, assid_usthb, 0, 0, 0, 0, 0, 0, 
+                    (pres_usthb + assid_usthb), tp_usthb, 0, moyenne, remarque 
                 ])
 
-            # ================= FORMULAIRE IFG =================
+            # ================= FORMULAIRE IFG (Mis à jour) =================
             elif is_ifg:
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    pres_ifg = st.number_input("Présence (/3)", 0.0, 3.0, 2.5, 0.5, key=f"ip_{id_elev}")
+                    pres_ifg = st.number_input("Présence (/3)", 0.0, 3.0, 2.5, 0.5, key=f"ip_{uid}")
                 with col2:
-                    trav_ifg = st.number_input("Travaux & Assiduité (/5)", 0.0, 5.0, 4.0, 0.5, key=f"it_{id_elev}")
+                    trav_ifg = st.number_input("Travaux (Salle, TP, Assiduité, Terrain) (/5)", 0.0, 5.0, 4.0, 0.5, key=f"it_{uid}")
                 with col3:
-                    exam_ifg = st.number_input("Examen Final (/12)", 0.0, 12.0, 8.0, 0.5, key=f"ie_{id_elev}")
+                    exam_ifg = st.number_input("Examen Final (/12)", 0.0, 12.0, 8.0, 0.5, key=f"ie_{uid}")
                 
-                remarque = st.text_area("💬 Remarque", key=f"re_{id_elev}")
+                remarque = st.text_area("💬 Remarque", key=f"re_{uid}")
                 moyenne = round(pres_ifg + trav_ifg + exam_ifg, 2)
                 
                 st.markdown(f"**Note finale : {moyenne}/20**")
                 
                 evaluations.append([
                     date_eval.strftime("%d/%m/%Y"), id_elev, row["اللقب"], row["الاسم"], row["القسم"],
-                    pres_ifg, trav_ifg, 0, 0, 0, 0, 0, 0, 
-                    pres_ifg + trav_ifg, 0, exam_ifg, moyenne, remarque 
+                    pres_ifg, 0, 0, 0, 0, 0, 0, 0, 
+                    (pres_ifg + trav_ifg), 0, exam_ifg, moyenne, remarque 
                 ])
 
     # ============ BOUTON DE SAUVEGARDE ============
     st.markdown("---")
     if st.button("💾 Enregistrer les notes", type="primary", use_container_width=True):
         
-        # Attribution de la bonne feuille selon vos consignes
+        # Attribution de la bonne feuille
         if is_ifg:
             target_sheet = "Evaluation 2"
         elif is_usthb:
