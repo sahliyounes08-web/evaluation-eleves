@@ -67,6 +67,72 @@ if check_password():
         for row in rows_to_save:
             worksheet.append_row(row, value_input_option="USER_ENTERED")
 
+    # --- FONCTION POUR EXPORTER VERS LA FEUILLE DE CLASSE ---
+    def export_to_class_sheet(df_bilan, classe_name):
+        client = get_gspread_client()
+        sheet = client.open_by_key(st.secrets["spreadsheet_id"])
+        try:
+            worksheet = sheet.worksheet(classe_name)
+        except gspread.exceptions.WorksheetNotFound:
+            st.error(f"❌ La feuille '{classe_name}' n'existe pas dans votre Google Sheet.")
+            return
+
+        all_values = worksheet.get_all_values()
+        if not all_values:
+            st.error("La feuille de classe est vide.")
+            return
+
+        # 1. Trouver la ligne d'en-tête et la colonne 'الترتيب'
+        header_row_idx = -1
+        id_col_idx = -1
+        for i, row in enumerate(all_values[:15]): # On cherche dans les 15 premières lignes
+            if "الترتيب" in row:
+                header_row_idx = i
+                id_col_idx = row.index("الترتيب")
+                break
+
+        if header_row_idx == -1:
+            st.error("❌ Impossible de trouver la colonne 'الترتيب' dans la feuille de classe.")
+            return
+
+        headers = all_values[header_row_idx]
+        
+        # 2. Chercher ou créer la colonne 'المعدل النهائي'
+        moy_col_idx = -1
+        for i, h in enumerate(headers):
+            if "معدل" in h or "Moyenne" in h:
+                moy_col_idx = i
+                break
+
+        if moy_col_idx == -1:
+            moy_col_idx = len(headers)
+            worksheet.update_cell(header_row_idx + 1, moy_col_idx + 1, "المعدل النهائي")
+
+        # 3. Créer un dictionnaire {ID: Ligne} pour trouver rapidement l'élève
+        id_to_row = {}
+        for row_idx, row in enumerate(all_values[header_row_idx+1:], start=header_row_idx+2):
+            if len(row) > id_col_idx:
+                student_id = str(row[id_col_idx]).strip()
+                if student_id:
+                    id_to_row[student_id] = row_idx
+
+        # 4. Préparer la mise à jour groupée
+        updates = []
+        for _, r in df_bilan.iterrows():
+            id_elev = str(r["ID_Eleve"]).strip()
+            moy = r["Moyenne"]
+            if id_elev in id_to_row:
+                row_num = id_to_row[id_elev]
+                updates.append(gspread.Cell(row_num, moy_col_idx + 1, moy))
+
+        # 5. Envoyer à Google Sheets
+        if updates:
+            worksheet.update_cells(updates)
+            st.success(f"🎉 Succès ! Les moyennes ont été envoyées dans la feuille **'{classe_name}'** (Colonne 'المعدل النهائي').")
+            st.balloons()
+        else:
+            st.warning("Aucun élève correspondant n'a été trouvé dans la feuille de classe.")
+
     # ============ INTERFACE ============
     st.title("📚 Plateforme d'Évaluation")
     st.markdown("### 👨‍🏫 Enseignant : SAHL YOUNES")
@@ -240,7 +306,6 @@ if check_password():
         id_elev = str(row["الترتيب"])
         uid = f"{i}_{id_elev}" 
         
-        # LA CORRECTION EST ICI : on vérifie que le tableau n'est pas vide avant de chercher
         titre_moy = ""
         if not df_bilan_trimestre.empty and "ID_Eleve" in df_bilan_trimestre.columns:
             moy_val = df_bilan_trimestre.loc[df_bilan_trimestre["ID_Eleve"] == id_elev, "Moyenne"]
@@ -255,7 +320,6 @@ if check_password():
             with col_b:
                 bonus = st.number_input("⭐ Bonus / Malus", min_value=-5, max_value=5, value=0, step=1, key=f"bonus_{uid}")
 
-            # ================= FORMULAIRE LYCÉE =================
             if is_lycee:
                 col1, col2 = st.columns(2)
                 with col1:
@@ -290,7 +354,6 @@ if check_password():
                     total_assiduite, devoir, composition, moy_seance, remarque, bonus
                 ])
 
-            # ================= FORMULAIRE USTHB =================
             elif is_usthb:
                 col1, col2, col3 = st.columns(3)
                 with col1: pres_usthb = st.number_input("Présence (/2.5)", 0.0, 2.5, 2.5, 0.5, key=f"up1_{uid}")
@@ -309,7 +372,6 @@ if check_password():
                     (pres_usthb + assid_usthb), tp_usthb, 0, moy_seance, remarque, bonus
                 ])
 
-            # ================= FORMULAIRE IFG =================
             elif is_ifg:
                 val_exam = dernieres_notes_dict.get(id_elev, (0.0, 10.0))[1]
                 
@@ -329,17 +391,25 @@ if check_password():
                     pres_ifg, 0, 0, 0, 0, 0, 0, 0, (pres_ifg + trav_ifg), 0, exam_ifg, moy_seance, remarque, bonus
                 ])
 
-    # ============ BOUTON DE SAUVEGARDE ============
+    # ============ BOUTONS DE SAUVEGARDE ET DE CLÔTURE ============
     st.markdown("---")
-    if st.button("💾 Enregistrer les notes", type="primary", use_container_width=True):
-        if is_ifg: target_sheet = "Evaluation 2"
-        elif is_usthb: target_sheet = "Evaluation 3"
-        else: target_sheet = "Evaluation"
+    col_btn1, col_btn2 = st.columns(2)
+    
+    with col_btn1:
+        if st.button("💾 Enregistrer les notes de la séance", type="primary", use_container_width=True):
+            if is_ifg: target_sheet = "Evaluation 2"
+            elif is_usthb: target_sheet = "Evaluation 3"
+            else: target_sheet = "Evaluation"
 
-        try:
-            save_evaluation(evaluations, target_sheet)
-            st.success(f"✅ Notes enregistrées dans l'onglet **{target_sheet}** !")
-            st.balloons()
-            st.cache_data.clear()
-        except Exception as e:
-            st.error(f"❌ Erreur lors de l'enregistrement : {e}")
+            try:
+                save_evaluation(evaluations, target_sheet)
+                st.success(f"✅ Notes enregistrées dans l'onglet **{target_sheet}** !")
+                st.balloons()
+                st.cache_data.clear()
+            except Exception as e:
+                st.error(f"❌ Erreur lors de l'enregistrement : {e}")
+
+    with col_btn2:
+        if not df_bilan_trimestre.empty:
+            if st.button("🏁 Clôturer le trimestre et envoyer les moyennes à la classe", type="secondary", use_container_width=True):
+                export_to_class_sheet(df_bilan_trimestre, classe_choisie)
