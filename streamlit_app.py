@@ -72,6 +72,11 @@ if check_password():
     st.caption("Lycée - USTHB - IFG Sonatrach")
     st.markdown("---")
 
+    # Bouton de rafraîchissement
+    if st.button("🔄 Rafraîchir les données"):
+        st.cache_data.clear()
+        st.rerun()
+
     try:
         df_students = load_students()
         df_evals = load_all_evaluations()
@@ -88,9 +93,17 @@ if check_password():
     is_ifg = "IFG" in classe_choisie.upper()
     is_lycee = not is_usthb and not is_ifg
 
+    # Message pour confirmer la détection
+    if is_usthb:
+        st.info("🏛️ Mode détecté : **Université (USTHB)** - Les notes seront enregistrées dans 'Evaluation 3'")
+    elif is_ifg:
+        st.info("🏢 Mode détecté : **Institut (IFG)** - Les notes seront enregistrées dans 'Evaluation 2'")
+    else:
+        st.info("🏫 Mode détecté : **Lycée** - Les notes seront enregistrées dans 'Evaluation'")
+
     st.success(f"**{len(df_classe)} étudiants** dans le groupe « {classe_choisie} »")
     
-    # Tableau de bord (seulement pour le lycée)
+    # ============ TABLEAU DE BORD (LYCÉE UNIQUEMENT) ============
     if is_lycee:
         st.markdown("### 📊 Tableau de bord de la classe")
         if not df_evals.empty and "Classe" in df_evals.columns:
@@ -101,11 +114,26 @@ if check_password():
                     if col in df_derniere_eval.columns:
                         df_derniere_eval[col] = pd.to_numeric(df_derniere_eval[col], errors='coerce').fillna(0).clip(0, 20)
                 
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Moyenne de la classe", f"{df_derniere_eval['Moyenne'].mean():.2f} / 20")
+                moyenne_classe = df_derniere_eval['Moyenne'].mean()
                 presents = len(df_derniere_eval[df_derniere_eval["Presence"] >= 1.5])
-                col2.metric("Taux de présence", f"{(presents/len(df_derniere_eval))*100:.1f} %")
-                col3.metric("Élèves en difficulté", f"{len(df_derniere_eval[df_derniere_eval['Moyenne'] < 10])}")
+                taux_presence = (presents/len(df_derniere_eval))*100 if len(df_derniere_eval) > 0 else 0
+                eleves_difficulte = df_derniere_eval[df_derniere_eval["Moyenne"] < 10]
+
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Moyenne de la classe", f"{moyenne_classe:.2f} / 20")
+                col2.metric("Taux de présence", f"{taux_presence:.1f} %")
+                col3.metric("Élèves en difficulté", f"{len(eleves_difficulte)}")
+
+                # Liste des élèves à encadrer
+                if not eleves_difficulte.empty:
+                    with st.expander("🚨 Voir les élèves qui ont besoin d'encadrement (Moyenne < 10)"):
+                        df_affichage = eleves_difficulte[["Nom", "Prénom", "Moyenne", "Remarque"]].copy()
+                        st.dataframe(df_affichage, use_container_width=True)
+
+                # Graphique
+                with st.expander("📈 Voir le graphique des moyennes"):
+                    df_derniere_eval["Nom_Complet"] = df_derniere_eval["Nom"].astype(str) + " " + df_derniere_eval["Prénom"].astype(str)
+                    st.bar_chart(df_derniere_eval.set_index("Nom_Complet")["Moyenne"])
         st.markdown("---")
 
     # ============ SAISIE DES NOTES ============
@@ -117,7 +145,7 @@ if check_password():
     elif is_usthb:
         st.caption("💡 Fac (USTHB) : Présence /2.5 + Assiduité /2.5 + TP /15.")
     elif is_ifg:
-        st.caption("💡 Institut (IFG) : Présence /3 + Travaux (Salle, TP, Assiduité, Terrain) /5 + Examen Final /12.")
+        st.caption("💡 Institut (IFG) : Présence /3 + Travaux /5 + Examen Final /12.")
 
     evaluations = []
 
@@ -159,7 +187,7 @@ if check_password():
                     total_assiduite, devoir, composition, moyenne, remarque
                 ])
 
-            # ================= FORMULAIRE USTHB (Mis à jour) =================
+            # ================= FORMULAIRE USTHB =================
             elif is_usthb:
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -174,14 +202,13 @@ if check_password():
                 
                 st.markdown(f"**Note finale : {moyenne}/20**")
                 
-                # On adapte le stockage pour ne pas casser le Google Sheet
                 evaluations.append([
                     date_eval.strftime("%d/%m/%Y"), id_elev, row["اللقب"], row["الاسم"], row["القسم"],
                     pres_usthb, assid_usthb, 0, 0, 0, 0, 0, 0, 
                     (pres_usthb + assid_usthb), tp_usthb, 0, moyenne, remarque 
                 ])
 
-            # ================= FORMULAIRE IFG (Mis à jour) =================
+            # ================= FORMULAIRE IFG =================
             elif is_ifg:
                 col1, col2, col3 = st.columns(3)
                 with col1:
@@ -206,7 +233,6 @@ if check_password():
     st.markdown("---")
     if st.button("💾 Enregistrer les notes", type="primary", use_container_width=True):
         
-        # Attribution de la bonne feuille
         if is_ifg:
             target_sheet = "Evaluation 2"
         elif is_usthb:
