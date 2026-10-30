@@ -95,19 +95,17 @@ if check_password():
 
     # Préparation des données de la classe
     df_derniere_eval = pd.DataFrame()
-    dernieres_notes_dict = {} # Pour afficher la moyenne dans le titre de l'élève
+    dernieres_notes_dict = {}
     
     if not df_evals.empty and "Classe" in df_evals.columns:
         df_evals_classe = df_evals[df_evals["Classe"] == classe_choisie].copy()
         if not df_evals_classe.empty:
             df_derniere_eval = df_evals_classe.sort_values("Date").groupby("ID_Eleve").last().reset_index()
             
-            # Nettoyage des données
             for col in ["Presence", "Total_Assiduite", "Note_Devoir", "Note_Composition", "Moyenne"]:
                 if col in df_derniere_eval.columns:
                     df_derniere_eval[col] = pd.to_numeric(df_derniere_eval[col], errors='coerce').fillna(0).clip(0, 20)
             
-            # Dictionnaire pour retrouver la moyenne rapidement
             for _, r in df_derniere_eval.iterrows():
                 dernieres_notes_dict[str(r["ID_Eleve"])] = float(r["Moyenne"])
 
@@ -116,7 +114,7 @@ if check_password():
         st.markdown("### 📊 Tableau de bord de la classe")
         
         if df_derniere_eval.empty:
-            st.info("Aucune évaluation enregistrée pour le moment. Le tableau de bord s'affichera dès que vous aurez noté des élèves.")
+            st.info("Aucune évaluation enregistrée pour le moment.")
         else:
             # --- TOP 3 DES ÉLÈVES ---
             st.markdown("#### 🏆 Podium de la classe")
@@ -133,14 +131,12 @@ if check_password():
             col_g1, col_g2, col_g3 = st.columns(3)
             
             with col_g1:
-                # Donut 1 : Répartition des moyennes
                 df_derniere_eval['Niveau'] = pd.cut(df_derniere_eval['Moyenne'], bins=[-1, 9.99, 13.99, 20], labels=['En difficulté', 'Moyen', 'Excellent'])
                 fig1 = px.pie(df_derniere_eval, names='Niveau', hole=0.5, title="Répartition des Moyennes", color='Niveau', color_discrete_map={'En difficulté':'#ef553b', 'Moyen':'#636efa', 'Excellent':'#00cc96'})
                 fig1.update_layout(margin=dict(t=40, b=0, l=0, r=0), showlegend=False)
                 st.plotly_chart(fig1, use_container_width=True)
 
             with col_g2:
-                # Donut 2 : Taux de présence
                 presents = len(df_derniere_eval[df_derniere_eval["Presence"] >= 1.5])
                 absents = len(df_derniere_eval) - presents
                 df_pres = pd.DataFrame({"Statut": ["Présents", "Absents"], "Nombre": [presents, absents]})
@@ -149,13 +145,17 @@ if check_password():
                 st.plotly_chart(fig2, use_container_width=True)
 
             with col_g3:
-                # Donut 3 : Alertes d'encadrement
                 eleves_difficulte = len(df_derniere_eval[df_derniere_eval["Moyenne"] < 10])
                 eleves_ok = len(df_derniere_eval) - eleves_difficulte
                 df_alert = pd.DataFrame({"Statut": ["À encadrer", "Satisfaisant"], "Nombre": [eleves_difficulte, eleves_ok]})
                 fig3 = px.pie(df_alert, names='Statut', values='Nombre', hole=0.5, title="Besoins d'encadrement", color='Statut', color_discrete_map={'À encadrer':'#ef553b', 'Satisfaisant':'#00cc96'})
                 fig3.update_layout(margin=dict(t=40, b=0, l=0, r=0), showlegend=False)
                 st.plotly_chart(fig3, use_container_width=True)
+
+            # --- GRAPHIQUE EN BARRES (REVENU !) ---
+            with st.expander("📈 Voir le graphique en barres des moyennes", expanded=False):
+                df_derniere_eval["Nom_Complet"] = df_derniere_eval["Nom"].astype(str) + " " + df_derniere_eval["Prénom"].astype(str)
+                st.bar_chart(df_derniere_eval.set_index("Nom_Complet")["Moyenne"])
 
             # --- LISTE DÉTAILLÉE ET EXPORTATION ---
             col_info, col_export = st.columns([3, 1])
@@ -168,7 +168,6 @@ if check_password():
                         st.write("Aucun élève en difficulté. Félicitations ! 🎉")
             
             with col_export:
-                # Bouton de téléchargement CSV
                 csv = df_derniere_eval[["Nom", "Prénom", "Classe", "Moyenne", "Remarque"]].to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="📥 Exporter en Excel (CSV)",
@@ -196,7 +195,6 @@ if check_password():
         id_elev = str(row["الترتيب"])
         uid = f"{i}_{id_elev}" 
         
-        # Récupération de la moyenne pour l'afficher dans le titre
         moy_affichee = dernieres_notes_dict.get(id_elev, None)
         titre_moy = f" — Moy: {moy_affichee:.2f}/20" if moy_affichee is not None else ""
         
@@ -228,7 +226,7 @@ if check_password():
                 moyenne = round((total_assiduite + devoir + composition) / 3, 2)
                 
                 st.markdown(f"**Moyenne calculée : {moyenne}/20** | Assiduité : {total_assiduite}/20")
-                st.progress(min(int(moyenne * 5), 100)) # Barre de progression visuelle
+                st.progress(min(int(moyenne * 5), 100))
                 
                 evaluations.append([
                     date_eval.strftime("%d/%m/%Y"), id_elev, row["اللقب"], row["الاسم"], row["القسم"],
@@ -283,6 +281,6 @@ if check_password():
             save_evaluation(evaluations, target_sheet)
             st.success(f"✅ Notes enregistrées dans l'onglet **{target_sheet}** !")
             st.balloons()
-            st.cache_data.clear() # On vide le cache pour forcer la mise à jour du tableau de bord au prochain clic
+            st.cache_data.clear()
         except Exception as e:
             st.error(f"❌ Erreur lors de l'enregistrement : {e}")
