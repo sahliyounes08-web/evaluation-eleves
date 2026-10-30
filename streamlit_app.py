@@ -100,12 +100,10 @@ if check_password():
     if not df_evals.empty and "Classe" in df_evals.columns:
         df_evals_classe = df_evals[df_evals["Classe"] == classe_choisie].copy()
         
-        # Ajout d'une colonne Bonus par défaut si elle n'existe pas encore
         if "Bonus" not in df_evals_classe.columns:
             df_evals_classe["Bonus"] = 0
 
         if not df_evals_classe.empty:
-            # 1. Pré-remplissage (mémoire du Devoir et de l'Examen)
             df_sorted = df_evals_classe.sort_values("Date")
             df_derniere = df_sorted.groupby("ID_Eleve").last().reset_index()
             
@@ -117,7 +115,6 @@ if check_password():
                     d, c = 10.0, 10.0
                 dernieres_notes_dict[str(r["ID_Eleve"])] = (max(0.0, min(20.0, d)), max(0.0, min(20.0, c)))
             
-            # 2. Calcul de la moyenne de TOUTES les séances
             result_rows = []
             for id_elev, group in df_evals_classe.groupby("ID_Eleve"):
                 last_row = group.sort_values("Date").iloc[-1]
@@ -134,7 +131,6 @@ if check_password():
                     moy_assiduite = group["Total_Assiduite"].mean()
                     devoir = pd.to_numeric(last_row["Note_Devoir"], errors='coerce')
                     compo = pd.to_numeric(last_row["Note_Composition"], errors='coerce')
-                    # NOUVELLE FORMULE DU LYCÉE
                     moy_base = ((moy_assiduite + devoir) / 2 + (compo * 2)) / 3
                     moy_finale = min(20.0, max(0.0, round(moy_base + total_bonus, 2)))
                     presence_moy = group["Presence"].mean()
@@ -170,7 +166,6 @@ if check_password():
         if df_bilan_trimestre.empty:
             st.info("Aucune évaluation enregistrée pour le moment.")
         else:
-            # Podium
             st.markdown("#### 🏆 Podium de la classe")
             top_3 = df_bilan_trimestre.nlargest(3, 'Moyenne')
             cols_podium = st.columns(3)
@@ -181,7 +176,6 @@ if check_password():
 
             st.markdown("---")
             
-            # Donuts
             col_g1, col_g2, col_g3 = st.columns(3)
             with col_g1:
                 df_bilan_trimestre['Niveau'] = pd.cut(df_bilan_trimestre['Moyenne'], bins=[-1, 9.99, 13.99, 20], labels=['En difficulté', 'Moyen', 'Excellent'])
@@ -246,17 +240,20 @@ if check_password():
         id_elev = str(row["الترتيب"])
         uid = f"{i}_{id_elev}" 
         
-        moy_affichee = df_bilan_trimestre[df_bilan_trimestre["ID_Eleve"] == id_elev]["Moyenne"].values
-        titre_moy = f" — Moy Cumulée: {moy_affichee[0]:.2f}/20" if len(moy_affichee) > 0 else ""
+        # LA CORRECTION EST ICI : on vérifie que le tableau n'est pas vide avant de chercher
+        titre_moy = ""
+        if not df_bilan_trimestre.empty and "ID_Eleve" in df_bilan_trimestre.columns:
+            moy_val = df_bilan_trimestre.loc[df_bilan_trimestre["ID_Eleve"] == id_elev, "Moyenne"]
+            if len(moy_val) > 0:
+                titre_moy = f" — Moy Cumulée: {moy_val.values[0]:.2f}/20"
         
         nom_complet = f"{row['اللقب']} {row['الاسم']}"
         
         with st.expander(f"👤 {nom_complet} (ID: {id_elev}) {titre_moy}"):
             
-            # --- BONUS / MALUS ---
             col_b, _ = st.columns([1, 3])
             with col_b:
-                bonus = st.number_input("⭐ Bonus / Malus", min_value=-5, max_value=5, value=0, step=1, key=f"bonus_{uid}", help="Ajoutez +1 pour un bon comportement, -1 pour le contraire.")
+                bonus = st.number_input("⭐ Bonus / Malus", min_value=-5, max_value=5, value=0, step=1, key=f"bonus_{uid}")
 
             # ================= FORMULAIRE LYCÉE =================
             if is_lycee:
