@@ -3,6 +3,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
 from datetime import datetime
+import plotly.express as px
 
 # ============ CONFIGURATION DE LA PAGE ============
 st.set_page_config(
@@ -72,7 +73,6 @@ if check_password():
     st.caption("Lycée - USTHB - IFG Sonatrach")
     st.markdown("---")
 
-    # Bouton de rafraîchissement
     if st.button("🔄 Rafraîchir les données"):
         st.cache_data.clear()
         st.rerun()
@@ -85,55 +85,98 @@ if check_password():
         st.stop()
 
     classes = sorted(df_students["القسم"].unique().tolist())
-    classe_choisie = st.selectbox("🎓 Sélectionnez un groupe / une classe :", classes)
+    classe_choisie = st.selectbox("🎓 Sélectionnez la classe :", classes)
     df_classe = df_students[df_students["القسم"] == classe_choisie].copy()
     
-    # Détection automatique du type d'établissement
-    is_usthb = "USTHB" in classe_choisie.upper()
-    is_ifg = "IFG" in classe_choisie.upper()
+    nom_classe_nettoye = str(classe_choisie).strip().upper()
+    is_usthb = "USTHB" in nom_classe_nettoye
+    is_ifg = "IFG" in nom_classe_nettoye
     is_lycee = not is_usthb and not is_ifg
 
-    # Message pour confirmer la détection
-    if is_usthb:
-        st.info("🏛️ Mode détecté : **Université (USTHB)** - Les notes seront enregistrées dans 'Evaluation 3'")
-    elif is_ifg:
-        st.info("🏢 Mode détecté : **Institut (IFG)** - Les notes seront enregistrées dans 'Evaluation 2'")
-    else:
-        st.info("🏫 Mode détecté : **Lycée** - Les notes seront enregistrées dans 'Evaluation'")
-
-    st.success(f"**{len(df_classe)} étudiants** dans le groupe « {classe_choisie} »")
+    # Préparation des données de la classe
+    df_derniere_eval = pd.DataFrame()
+    dernieres_notes_dict = {} # Pour afficher la moyenne dans le titre de l'élève
     
+    if not df_evals.empty and "Classe" in df_evals.columns:
+        df_evals_classe = df_evals[df_evals["Classe"] == classe_choisie].copy()
+        if not df_evals_classe.empty:
+            df_derniere_eval = df_evals_classe.sort_values("Date").groupby("ID_Eleve").last().reset_index()
+            
+            # Nettoyage des données
+            for col in ["Presence", "Total_Assiduite", "Note_Devoir", "Note_Composition", "Moyenne"]:
+                if col in df_derniere_eval.columns:
+                    df_derniere_eval[col] = pd.to_numeric(df_derniere_eval[col], errors='coerce').fillna(0).clip(0, 20)
+            
+            # Dictionnaire pour retrouver la moyenne rapidement
+            for _, r in df_derniere_eval.iterrows():
+                dernieres_notes_dict[str(r["ID_Eleve"])] = float(r["Moyenne"])
+
     # ============ TABLEAU DE BORD (LYCÉE UNIQUEMENT) ============
     if is_lycee:
         st.markdown("### 📊 Tableau de bord de la classe")
-        if not df_evals.empty and "Classe" in df_evals.columns:
-            df_evals_classe = df_evals[df_evals["Classe"] == classe_choisie].copy()
-            if not df_evals_classe.empty:
-                df_derniere_eval = df_evals_classe.sort_values("Date").groupby("ID_Eleve").last().reset_index()
-                for col in ["Presence", "Total_Assiduite", "Note_Devoir", "Note_Composition", "Moyenne"]:
-                    if col in df_derniere_eval.columns:
-                        df_derniere_eval[col] = pd.to_numeric(df_derniere_eval[col], errors='coerce').fillna(0).clip(0, 20)
-                
-                moyenne_classe = df_derniere_eval['Moyenne'].mean()
+        
+        if df_derniere_eval.empty:
+            st.info("Aucune évaluation enregistrée pour le moment. Le tableau de bord s'affichera dès que vous aurez noté des élèves.")
+        else:
+            # --- TOP 3 DES ÉLÈVES ---
+            st.markdown("#### 🏆 Podium de la classe")
+            top_3 = df_derniere_eval.nlargest(3, 'Moyenne')
+            cols_podium = st.columns(3)
+            medals = ["🥇", "🥈", "🥉"]
+            for idx, (_, etudiant) in enumerate(top_3.iterrows()):
+                with cols_podium[idx]:
+                    st.success(f"{medals[idx]} **{etudiant['Nom']} {etudiant['Prénom']}**\n\nMoyenne : **{etudiant['Moyenne']:.2f}/20**")
+
+            st.markdown("---")
+            
+            # --- GRAPHIQUES DONUTS ---
+            col_g1, col_g2, col_g3 = st.columns(3)
+            
+            with col_g1:
+                # Donut 1 : Répartition des moyennes
+                df_derniere_eval['Niveau'] = pd.cut(df_derniere_eval['Moyenne'], bins=[-1, 9.99, 13.99, 20], labels=['En difficulté', 'Moyen', 'Excellent'])
+                fig1 = px.pie(df_derniere_eval, names='Niveau', hole=0.5, title="Répartition des Moyennes", color='Niveau', color_discrete_map={'En difficulté':'#ef553b', 'Moyen':'#636efa', 'Excellent':'#00cc96'})
+                fig1.update_layout(margin=dict(t=40, b=0, l=0, r=0), showlegend=False)
+                st.plotly_chart(fig1, use_container_width=True)
+
+            with col_g2:
+                # Donut 2 : Taux de présence
                 presents = len(df_derniere_eval[df_derniere_eval["Presence"] >= 1.5])
-                taux_presence = (presents/len(df_derniere_eval))*100 if len(df_derniere_eval) > 0 else 0
-                eleves_difficulte = df_derniere_eval[df_derniere_eval["Moyenne"] < 10]
+                absents = len(df_derniere_eval) - presents
+                df_pres = pd.DataFrame({"Statut": ["Présents", "Absents"], "Nombre": [presents, absents]})
+                fig2 = px.pie(df_pres, names='Statut', values='Nombre', hole=0.5, title="Taux de Présence", color='Statut', color_discrete_map={'Présents':'#00cc96', 'Absents':'#ef553b'})
+                fig2.update_layout(margin=dict(t=40, b=0, l=0, r=0), showlegend=False)
+                st.plotly_chart(fig2, use_container_width=True)
 
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Moyenne de la classe", f"{moyenne_classe:.2f} / 20")
-                col2.metric("Taux de présence", f"{taux_presence:.1f} %")
-                col3.metric("Élèves en difficulté", f"{len(eleves_difficulte)}")
+            with col_g3:
+                # Donut 3 : Alertes d'encadrement
+                eleves_difficulte = len(df_derniere_eval[df_derniere_eval["Moyenne"] < 10])
+                eleves_ok = len(df_derniere_eval) - eleves_difficulte
+                df_alert = pd.DataFrame({"Statut": ["À encadrer", "Satisfaisant"], "Nombre": [eleves_difficulte, eleves_ok]})
+                fig3 = px.pie(df_alert, names='Statut', values='Nombre', hole=0.5, title="Besoins d'encadrement", color='Statut', color_discrete_map={'À encadrer':'#ef553b', 'Satisfaisant':'#00cc96'})
+                fig3.update_layout(margin=dict(t=40, b=0, l=0, r=0), showlegend=False)
+                st.plotly_chart(fig3, use_container_width=True)
 
-                # Liste des élèves à encadrer
-                if not eleves_difficulte.empty:
-                    with st.expander("🚨 Voir les élèves qui ont besoin d'encadrement (Moyenne < 10)"):
-                        df_affichage = eleves_difficulte[["Nom", "Prénom", "Moyenne", "Remarque"]].copy()
-                        st.dataframe(df_affichage, use_container_width=True)
-
-                # Graphique
-                with st.expander("📈 Voir le graphique des moyennes"):
-                    df_derniere_eval["Nom_Complet"] = df_derniere_eval["Nom"].astype(str) + " " + df_derniere_eval["Prénom"].astype(str)
-                    st.bar_chart(df_derniere_eval.set_index("Nom_Complet")["Moyenne"])
+            # --- LISTE DÉTAILLÉE ET EXPORTATION ---
+            col_info, col_export = st.columns([3, 1])
+            with col_info:
+                with st.expander("🚨 Voir la liste des élèves à encadrer (Moyenne < 10)"):
+                    df_dif = df_derniere_eval[df_derniere_eval["Moyenne"] < 10]
+                    if not df_dif.empty:
+                        st.dataframe(df_dif[["Nom", "Prénom", "Moyenne", "Remarque"]], use_container_width=True)
+                    else:
+                        st.write("Aucun élève en difficulté. Félicitations ! 🎉")
+            
+            with col_export:
+                # Bouton de téléchargement CSV
+                csv = df_derniere_eval[["Nom", "Prénom", "Classe", "Moyenne", "Remarque"]].to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Exporter en Excel (CSV)",
+                    data=csv,
+                    file_name=f"resultats_{classe_choisie}.csv",
+                    mime="text/csv",
+                    type="primary"
+                )
         st.markdown("---")
 
     # ============ SAISIE DES NOTES ============
@@ -145,16 +188,21 @@ if check_password():
     elif is_usthb:
         st.caption("💡 Fac (USTHB) : Présence /2.5 + Assiduité /2.5 + TP /15.")
     elif is_ifg:
-        st.caption("💡 Institut (IFG) : Présence /3 + Travaux /5 + Examen Final /12.")
+        st.caption("💡 Institut (IFG) : Présence /3 + Travaux (Salle, TP, Terrain) /5 + Examen Final /12.")
 
     evaluations = []
 
     for i, (_, row) in enumerate(df_classe.iterrows()):
         id_elev = str(row["الترتيب"])
         uid = f"{i}_{id_elev}" 
+        
+        # Récupération de la moyenne pour l'afficher dans le titre
+        moy_affichee = dernieres_notes_dict.get(id_elev, None)
+        titre_moy = f" — Moy: {moy_affichee:.2f}/20" if moy_affichee is not None else ""
+        
         nom_complet = f"{row['اللقب']} {row['الاسم']}"
         
-        with st.expander(f"👤 {nom_complet}"):
+        with st.expander(f"👤 {nom_complet} (ID: {id_elev}) {titre_moy}"):
             
             # ================= FORMULAIRE LYCÉE =================
             if is_lycee:
@@ -179,7 +227,8 @@ if check_password():
                 total_assiduite = presence + participation + calme + tablier + affaires + cahier + technologie + projet
                 moyenne = round((total_assiduite + devoir + composition) / 3, 2)
                 
-                st.markdown(f"**Moyenne : {moyenne}/20** | Assiduité : {total_assiduite}/20")
+                st.markdown(f"**Moyenne calculée : {moyenne}/20** | Assiduité : {total_assiduite}/20")
+                st.progress(min(int(moyenne * 5), 100)) # Barre de progression visuelle
                 
                 evaluations.append([
                     date_eval.strftime("%d/%m/%Y"), id_elev, row["اللقب"], row["الاسم"], row["القسم"],
@@ -190,59 +239,50 @@ if check_password():
             # ================= FORMULAIRE USTHB =================
             elif is_usthb:
                 col1, col2, col3 = st.columns(3)
-                with col1:
-                    pres_usthb = st.number_input("Présence (/2.5)", 0.0, 2.5, 2.5, 0.5, key=f"up1_{uid}")
-                with col2:
-                    assid_usthb = st.number_input("Assiduité (/2.5)", 0.0, 2.5, 2.5, 0.5, key=f"up2_{uid}")
-                with col3:
-                    tp_usthb = st.number_input("Note du TP (/15)", 0.0, 15.0, 10.0, 0.5, key=f"ut_{uid}")
+                with col1: pres_usthb = st.number_input("Présence (/2.5)", 0.0, 2.5, 2.5, 0.5, key=f"up1_{uid}")
+                with col2: assid_usthb = st.number_input("Assiduité (/2.5)", 0.0, 2.5, 2.5, 0.5, key=f"up2_{uid}")
+                with col3: tp_usthb = st.number_input("Note du TP (/15)", 0.0, 15.0, 10.0, 0.5, key=f"ut_{uid}")
                 
                 remarque = st.text_area("💬 Remarque", key=f"re_{uid}")
                 moyenne = round(pres_usthb + assid_usthb + tp_usthb, 2)
                 
                 st.markdown(f"**Note finale : {moyenne}/20**")
+                st.progress(min(int(moyenne * 5), 100))
                 
                 evaluations.append([
                     date_eval.strftime("%d/%m/%Y"), id_elev, row["اللقب"], row["الاسم"], row["القسم"],
-                    pres_usthb, assid_usthb, 0, 0, 0, 0, 0, 0, 
-                    (pres_usthb + assid_usthb), tp_usthb, 0, moyenne, remarque 
+                    pres_usthb, assid_usthb, 0, 0, 0, 0, 0, 0, (pres_usthb + assid_usthb), tp_usthb, 0, moyenne, remarque 
                 ])
 
             # ================= FORMULAIRE IFG =================
             elif is_ifg:
                 col1, col2, col3 = st.columns(3)
-                with col1:
-                    pres_ifg = st.number_input("Présence (/3)", 0.0, 3.0, 2.5, 0.5, key=f"ip_{uid}")
-                with col2:
-                    trav_ifg = st.number_input("Travaux (Salle, TP, Assiduité, Terrain) (/5)", 0.0, 5.0, 4.0, 0.5, key=f"it_{uid}")
-                with col3:
-                    exam_ifg = st.number_input("Examen Final (/12)", 0.0, 12.0, 8.0, 0.5, key=f"ie_{uid}")
+                with col1: pres_ifg = st.number_input("Présence (/3)", 0.0, 3.0, 2.5, 0.5, key=f"ip_{uid}")
+                with col2: trav_ifg = st.number_input("Travaux (Salle, TP, Assiduité, Terrain) (/5)", 0.0, 5.0, 4.0, 0.5, key=f"it_{uid}")
+                with col3: exam_ifg = st.number_input("Examen Final (/12)", 0.0, 12.0, 8.0, 0.5, key=f"ie_{uid}")
                 
                 remarque = st.text_area("💬 Remarque", key=f"re_{uid}")
                 moyenne = round(pres_ifg + trav_ifg + exam_ifg, 2)
                 
                 st.markdown(f"**Note finale : {moyenne}/20**")
+                st.progress(min(int(moyenne * 5), 100))
                 
                 evaluations.append([
                     date_eval.strftime("%d/%m/%Y"), id_elev, row["اللقب"], row["الاسم"], row["القسم"],
-                    pres_ifg, 0, 0, 0, 0, 0, 0, 0, 
-                    (pres_ifg + trav_ifg), 0, exam_ifg, moyenne, remarque 
+                    pres_ifg, 0, 0, 0, 0, 0, 0, 0, (pres_ifg + trav_ifg), 0, exam_ifg, moyenne, remarque 
                 ])
 
     # ============ BOUTON DE SAUVEGARDE ============
     st.markdown("---")
     if st.button("💾 Enregistrer les notes", type="primary", use_container_width=True):
-        
-        if is_ifg:
-            target_sheet = "Evaluation 2"
-        elif is_usthb:
-            target_sheet = "Evaluation 3"
-        else:
-            target_sheet = "Evaluation"
+        if is_ifg: target_sheet = "Evaluation 2"
+        elif is_usthb: target_sheet = "Evaluation 3"
+        else: target_sheet = "Evaluation"
 
         try:
             save_evaluation(evaluations, target_sheet)
             st.success(f"✅ Notes enregistrées dans l'onglet **{target_sheet}** !")
             st.balloons()
+            st.cache_data.clear() # On vide le cache pour forcer la mise à jour du tableau de bord au prochain clic
         except Exception as e:
             st.error(f"❌ Erreur lors de l'enregistrement : {e}")
